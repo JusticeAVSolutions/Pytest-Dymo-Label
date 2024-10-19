@@ -91,3 +91,9 @@ These placeholders will be replaced with data from your test session.
 3. Run your tests with the `--print-label` option.
 4. At the end of the test session, a label is printed with the test results and other specified data.
 
+## Label Preview
+![image](https://github.com/user-attachments/assets/9912ff43-5364-4467-8aab-fbc24a3ebf3d)
+
+The bottom barcode is PDF417 format and is the serial number.
+
+The right QR code contains the text of the label, along with the name of the first failed test if applicable.
