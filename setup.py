@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='pytest-dymo-label',
-    version='0.1.1',
+    version='0.1.2',
     author='Mark Mayhew',
     author_email='mark.mayhew@javs.com',
     description='A pytest plugin to print Dymo labels from test data.',

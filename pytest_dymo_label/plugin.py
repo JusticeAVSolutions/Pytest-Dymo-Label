@@ -14,8 +14,9 @@ from . import templates  # Assuming templates is a subpackage
 __pytest_sequencer_plugin__ = True
 
 LABEL_TEMPLATE_FILENAME = 'manufacturing_label_30334.dymo'
-DYMO_PRINT_PATH = "DYMO/DLS/Printing/PrintLabel"
-
+DYMO_PATH = "DYMO/DLS/Printing"
+DYMO_PRINT_LABEL = f"{DYMO_PATH}/PrintLabel"
+DYMO_GET_PRINTERS = f"{DYMO_PATH}/GetPrinters"
 
 def pytest_addoption(parser):
     # parser.addoption("--serial-number", action="store", help="Device serial number")
@@ -28,12 +29,13 @@ def pytest_configure(config):
     # config.serial_number = config.getoption("--serial-number")
     # config.model_number = config.getoption("--model-number")
     # config.firmware_version = config.getoption("--firmware-version")
-    config.dymo_url = config.getoption("--dymo-url") + DYMO_PRINT_PATH
+    config.dymo_url = config.getoption("--dymo-url")
     config.test_status = 'PASS'  # Default to PASS; will be updated if any test fails
     config.label_should_print = config.getoption("--print-label", False)
 
 def pytest_sessionstart(session):
     session.label_data = {}  # Initialize an empty dictionary for label data
+    session.plugin_errors = []  # Initialize a list to store plugin errors
 
 @pytest.fixture
 def label_data(request):
@@ -51,13 +53,25 @@ def pytest_runtest_makereport(item, call):
             if 'first_failed_test' not in item.session.label_data:
                 item.session.label_data['first_failed_test'] = item.name
 
-
 def pytest_sessionfinish(session, exitstatus):
     config = session.config
     label_data = session.label_data
+    printer_name = 'DYMO LabelWriter 4XL'
 
-    if config.label_should_print == False:
+    if not config.label_should_print:
         return 
+    
+    is_connected = get_printer_connected(config.dymo_url, printer_name)
+    if is_connected:
+        print(f"The printer '{printer_name}' is connected.")
+    else:
+        error_message = f"The printer '{printer_name}' is not connected."
+        print(f"[PLUGIN_ERROR] {__name__}: {error_message}")
+        session.plugin_errors.append({
+            'plugin': __name__,
+            'error': error_message
+        })
+        return  # Exit early if printer is not connected
 
     # **1. Check for Non-Test Execution Modes**
     non_test_flags = [
@@ -96,7 +110,7 @@ def pytest_sessionfinish(session, exitstatus):
     # Retrieve lists of passed and failed test reports
     passed_tests = terminalreporter.stats.get('passed', [])
     failed_tests = terminalreporter.stats.get('failed', [])
-    
+
     # Count the number of passed and failed tests
     num_passed = len(passed_tests)
     num_failed = len(failed_tests)
@@ -109,10 +123,20 @@ def pytest_sessionfinish(session, exitstatus):
     try:
         label_xml = files(templates).joinpath(LABEL_TEMPLATE_FILENAME).read_text(encoding='utf-8')
     except FileNotFoundError:
-        print(f"Label template '{LABEL_TEMPLATE_FILENAME}' not found in the package.")
+        error_message = f"Label template '{LABEL_TEMPLATE_FILENAME}' not found in the package."
+        print(f"[PLUGIN_ERROR] {__name__}: {error_message}")
+        session.plugin_errors.append({
+            'plugin': __name__,
+            'error': error_message
+        })
         return
     except Exception as e:
-        print(f"Error reading label template: {e}")
+        error_message = f"Error reading label template: {e}"
+        print(f"[PLUGIN_ERROR] {__name__}: {error_message}")
+        session.plugin_errors.append({
+            'plugin': __name__,
+            'error': error_message
+        })
         return
 
     # Replace placeholders
@@ -134,7 +158,16 @@ FW: {label_data.get('firmware_version', 'N/A')}
 First Failed Test: {first_failed_test}"""
 
     # Parse the XML to update the QR code content
-    root = etree.fromstring(label_xml.encode('utf-8'))
+    try:
+        root = etree.fromstring(label_xml.encode('utf-8'))
+    except etree.XMLSyntaxError as e:
+        error_message = f"Failed to parse label XML: {e}"
+        print(f"[PLUGIN_ERROR] {__name__}: {error_message}")
+        session.plugin_errors.append({
+            'plugin': __name__,
+            'error': error_message
+        })
+        return
 
     # Update QR code DataString and Value
     data_string_elements = root.xpath('//QRCodeObject/Data/DataString')
@@ -149,16 +182,52 @@ First Failed Test: {first_failed_test}"""
     # Send the label to the Dymo printer
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
     data = {
-        'printerName': 'DYMO LabelWriter 4XL',
+        'printerName': printer_name,
         # 'printParamsXml': '',
         'labelXml': label_xml,
         'labelSetXml': ''
     }
 
     try:
-        response = requests.post(config.dymo_url, headers=headers, data=data, verify=False)
-        # response = requests.post(config.dymo_url, data=data, verify=False)
+        response = requests.post(f"{config.dymo_url}{DYMO_PRINT_LABEL}", headers=headers, data=data, verify=False)
         response.raise_for_status()
         print("Label printed successfully.")
     except requests.exceptions.RequestException as e:
-        print(f"Failed to print label: {e}")
+        error_message = f"Failed to print label: {e}"
+        print(f"[PLUGIN_ERROR] {__name__}: {error_message}")
+        session.plugin_errors.append({
+            'plugin': __name__,
+            'error': error_message
+        })
+
+def get_printer_connected(dymo_url, printer_name):
+    printers = get_printers(dymo_url)
+    for printer in printers:
+        if printer['Name'] == printer_name:
+            return printer['IsConnected']
+    
+    return False
+
+def get_printers(dymo_url):
+    try:
+        response = requests.get(f"{dymo_url}{DYMO_GET_PRINTERS}", verify=False)
+        response.raise_for_status()
+        # Parse XML response
+        root = etree.fromstring(response.content)
+        printers = []
+        for printer in root.findall('.//LabelWriterPrinter'):
+            name = printer.findtext('Name')
+            model_name = printer.findtext('ModelName')
+            is_connected = printer.findtext('IsConnected') == 'True'
+
+            printers.append({
+                'Name': name,
+                'IsConnected': is_connected
+                })
+        return printers
+    except requests.exceptions.RequestException as e:
+        print(f"[ERROR] Failed to retrieve printers: {e}")
+        return []
+    except etree.XMLSyntaxError as e:
+        print(f"[ERROR] Failed to parse GetPrinters response XML: {e}")
+        return []
