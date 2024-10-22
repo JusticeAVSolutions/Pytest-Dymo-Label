@@ -5,6 +5,7 @@ from lxml import etree
 import importlib.resources
 import os
 import uuid
+from importlib.resources import files
 
 # Use importlib.resources to access the label template within the package
 from . import templates  # Assuming templates is a subpackage
@@ -106,8 +107,7 @@ def pytest_sessionfinish(session, exitstatus):
 
     # Read the label template from the package
     try:
-        with importlib.resources.open_text(templates, LABEL_TEMPLATE_FILENAME, encoding='utf-8') as f:
-            label_xml = f.read()
+        label_xml = files(templates).joinpath(LABEL_TEMPLATE_FILENAME).read_text(encoding='utf-8')
     except FileNotFoundError:
         print(f"Label template '{LABEL_TEMPLATE_FILENAME}' not found in the package.")
         return
